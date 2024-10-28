@@ -145,3 +145,132 @@ Finally the `sslkeylogfile` contains what seems to be valid SSL session keys. Mo
 The two files we need for further analysis are `secret.encrypted` and `sslkeylogfile`, we extract them from the disk and keep them in mind.
 
 Since there is nothing we can do unless we get the password we move on to the next file to analysis.
+
+## corp_net1.pcap
+
+Opening the file using wireshark we can see that the captured traffic is from 2024-09-03 & 2024-09-04. Looking over the protocol statistics we can see some interesting and of note protocols that are was used:
+
+![Corp_net1 protocols](images/protocol_hierarchy_2.png)
+
+The following was noted:
+
+- Once again we have `FTP` traffic, indicating that some files have been transfered.
+- We can see `HTTP`traffic, along with `TLS` traffic, indicating that websites have been visisted with both encrypted and unencrypted chanels.
+- A large amount of `DNS` lookups have been made.
+
+To examine further we could also filter out the traffic, so only the packets related to the sucpicious IP address (192.200.72.84) or the workstation (CTF-PC01).
+
+### FTP
+
+To start of we filter the data so we can get the first packet that is sent using FTP, it is also done from our sucpicious ip. If we follow the TCP stream from that packet we can see that a file has been uploaded to the server named `puzzle.exe`:
+
+![puzzle.exe upload](images/puzzle_upload.png)
+
+Looking at the following TCP stream and view it in hex view we can see the starting values, `4D 5A`, maches that of a DOS executable. Here we do the same technique with the first pcap file we analyzed (view as binary and save). Repeating this for all FTP uploads we get the following files:
+
+- puzzle.exe
+- Recycle-Bin.zip
+- archive
+
+We save these and will analyze them later.
+
+### DNS
+
+Filtering out the DNS traffic we see nothing out of the ordinary at the start, just usual and legit sites being visited. This is except one, `whatyoulookingat.com`, which we will get to in the next session. After a while we can see queries and responses containing the sucpicious IP address,many looking "strange" and not being valid domains:
+
+![Strange domainss](images/strange_dns.png)
+
+By analizing the first query done of `RFIE4RYNBINAUAAAAAGUSSCEKIAAAAUAAAAADYAIAIAAAAF2` (using a encryption/decoding detection tool) we can see that it is being identified as "Base62" encoding. If we decode it we get the following:
+
+![Decoded domain](images/base62_domain.png)
+
+The "png" string returned indicates that this is the start of an image. Trying to render this gives nothing, meaning that we need the remaining parts of the image.
+
+The full image is most likley a combination of all the DNS queries done by this IP, added togheter, base62 decoded and rendered. By using Tshark we can filter the traffic to only contain DNS, the IP 195.200.72.82 and to finally only print out the DNS name field:
+
+```
+tshark -r corp_net1.pcap -Y "ip.addr == 195.200.72.82 and dns" -T fields -e dns.qry.name
+```
+
+We save the output to a file, remove all the newlines, decoding and rendering it gives us the fourth flag `CTF[TOPPALUA]`:
+
+![Flag_4](images/flag4.png)
+
+### HTTP / TLS traffic
+
+Filtering out HTTP traffic does not yeild a lot.
+
+![Unencrypted HTTP](images/http_traffic_1.png)
+
+If we recal the information we got from `disk.img` that was present in the ransomware, we know a HTTP request (through cURL) was done to the domain `whatyoulookingat.com` with the SSL session keys that we have. Further the date of the current traffic also corresponds to that of the modification that of the `sslkeylogfile`.
+
+If there was a HTTP request done, there is a high chance for a DNS lookup made to the domain. From looking at the DNS traffic in the previous section we saw that there had been mentions of the domain in the DNS records.
+
+This confirms that the request done is most likley encrypted and we need to use the SSL session keys the decrypt the traffic. To do this we import the file in Wireshark (preferences -> protocols -> TLS) and reload. Once again we filter for HTTP and we can now see the request present in the ransomware:
+
+![Decrypted Traffic](images/http_traffic_2.png)
+
+Looking at the response we see the following:
+
+```http
+HTTP/1.1 200 OK
+Date: Tue, 03 Sep 2024 15:31:43 GMT
+Content-Length: 17
+Connection: Close
+Server: INetSim HTTPs Server
+Content-Type: text/plain
+
+pheiph0Xeiz8OhNa
+```
+
+With that we have the password, "pheiph0Xeiz8OhNa" ,used to encrypt the `secret` file and can decrypt it.
+
+## disk.img - Part 2
+
+Back to `sceret.encryped` we no have the password and can decrypt it. Since we know from the ransomware that it was encrypted using OpenSSL we can decrypt it the same way with the following command:
+
+```
+openssl enc -aes-128-cbc -pass pass:pheiph0Xeiz8OhNa -in secret.encrypted -out secret.decrypted
+```
+
+Executing this in a terminal we get no warning of bad decrypt, indicating the password was correct and reading the output gives us our fifth flag `CTF[OPPORTUNISTICALLY]`:
+
+![Flag 5](images/flag5.png)
+
+With this the disk is done and we can move on.
+
+## corp_net2.pcap
+
+Looking over this traffic capture we can see that it dates from earlier that the first one (2024-08-29) and contains less amount of packets in total. When viewing the protocol hierarchy we can see that it is mainly encrypted protocols, not good for us:
+
+![corp_net2 protocols](images/protocol_hierarchy_3.png)
+
+We have some interesting though that might be worth analyzing:
+
+- HTTP
+- SMB/SMB2
+- Kerberos
+
+Lets start with the HTTP traffic. We can see one GET request has been done and multiple "PROPFIND" request being done.
+
+![HTTP traffic](images/http_traffic_3.png)
+
+Further analysis of these request shows that these are authentication attempts to a WebDav share. The authentication method used is NTLMSSP. If we filter the traffi to match NTLMSSP we get the earlier mentioned SMB2 traffic:
+
+![NTLMSSP](images/ntlmssp.png)
+
+Here we can see multiple failed attempts to connect to the share using the "LAB\CTF" user. Since SMB2 can use NTLMv2 as authentication and we have all the nessecary parts to reconstruct the hash, we could extract it and try to crack it.
+
+You could manualy recreate the hashes by analyzing the request and response, or use a CLI scripts (such as the [following](https://github.com/mlgualtieri/NTLMRawUnHide)) to extract them. In this case I went with NTLMRawUnHide script. Running the script on the file extracts multiple hashes:
+
+![hashes](images/ntlmv2_hashes.png)
+
+Do get this to a format suitable for cracking we run the following `python3 NTLMRawUnHide.py -i corp_net2.pcap -o hashes -q`, which saves the output to `hashes`.
+
+Finally we can try to crack them using ex. hashcats. Since we got a wordlist (`WORDLIST.txt`) from the first step, lets first try running this list against them. After executing hashcat with the appropriate mode (5600), the hashes and the wordlist, we get that hashcat has successfully cracked the hash. Showing the result gives us or sixth flag `CTF[RHODE_ISLAND_6]`
+
+![NTLM cracked](images/hashcat_ntlm.png)
+
+An alternative way of solving this found afterwards was extracting the kerberos credentials present through the use of ex. Networkminer. Afterwards this can be cracked, which results in the same flag:
+
+![kerberos](images/kerberos.png)

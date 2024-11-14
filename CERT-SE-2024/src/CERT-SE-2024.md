@@ -1,5 +1,7 @@
 # CERT-SE-2024 CTF
 
+**Update**: I got a email from MSB a couple days after the CTF finished saying I got 8/9 flags. The flag missed will be specified at that point in the writeup.
+
 This CTF was hosted by CERT-SE (MSB) in October 2024. It is available at the following link: https://www.cert.se/2024/09/cert-se-ctf2024.html.
 
 From the description we have:
@@ -56,6 +58,14 @@ The first one can be found at the very start of the IRC conversations TCP-stream
 Continuing down the conversation we can see a message discussing a "strange string" that their were handed by someone at allsafe. This is the second flag `CTF[E65D46AD10F92508F500944B53168930]`:
 
 ![FLAG 2](images/flag2.png)
+
+> MISSED FLAG
+>
+> The flag in question here is supposed to be decrypted. This was the part I missed when doing the CTF.
+>
+> The IRC conversations suggest they should ask "John" about it, a direct reference to JohnTheRipper tool. Saving the hash to a file and running john on it while get the flag (or running hashcat with the correct mode).
+>
+> I'll leave this up for own solving.
 
 With the two flags out of the way lets starts extracting the different files from the traffic.
 
@@ -190,7 +200,7 @@ The "png" string returned indicates that this is the start of an image. Trying t
 The full image is most likely a combination of all the DNS queries done by this IP, added together, base62 decoded and rendered. By using Tshark we can filter the traffic to only contain DNS, the IP 195.200.72.82 and to finally only print out the DNS name field:
 
 ```
-tshark -r corp_net1.pcap -Y "ip.addr == 195.200.72.82 and dns" -T fields -e dns.qry.name
+tshark -r corp_net1.pcap -Y "ip.dst == 195.200.72.82 and dns" -T fields -e dns.qry.name
 ```
 
 We save the output to a file, remove all the newlines, decoding and rendering it gives us the fourth flag `CTF[TOPPALUA]`:
